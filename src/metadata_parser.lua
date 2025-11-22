@@ -88,9 +88,8 @@ end
 
 ---
 -- Gets the SQL query for fetching book metadata from KoboReader.sqlite.
--- Query selects books (ContentType = 6) with kepub-style IDs.
--- Excludes file:// prefixed paths and UUID-style IDs (containing dashes).
--- Kepub IDs are alphanumeric strings like 0N3773Z6SFV9Z.
+-- Query selects all books (ContentType = 6) from the content table.
+-- Excludes file:// prefixed paths, they are excluded because these are sideloaded files not stored in kepub directory.
 -- @return string: SQL query string.
 local function getBookMetadataQuery()
     return [[
@@ -98,7 +97,6 @@ local function getBookMetadataQuery()
         FROM content
         WHERE ContentType = 6
         AND ContentID NOT LIKE 'file://%'
-        AND ContentID NOT LIKE '%-%'
     ]]
 end
 
@@ -190,7 +188,7 @@ function MetadataParser:parseMetadata()
     logger.dbg("KoboPlugin: Database found, size:", attr.size, "bytes")
 
     local conn, stmt = openDatabaseAndPrepareQuery(db_path)
-    if not conn then
+    if not conn or not stmt then
         self.metadata = {}
         return self.metadata
     end
@@ -356,37 +354,79 @@ local function createAccessibleBookEntry(book_id, book_meta, filepath, thumbnail
 end
 
 ---
+-- Scans the kepub directory and returns a list of file basenames (book IDs).
+-- Skips hidden files and directories.
+-- @return table: Array of book ID strings found in kepub directory.
+function MetadataParser:scanKepubDirectory()
+    local kepub_path = self:getKepubPath()
+    local book_ids = {}
+
+    local attr = lfs.attributes(kepub_path)
+    if not attr or attr.mode ~= "directory" then
+        logger.warn("KoboPlugin: Kepub directory not found or not a directory:", kepub_path)
+        return book_ids
+    end
+
+    for entry in lfs.dir(kepub_path) do
+        if entry ~= "." and entry ~= ".." and not entry:match("^%.") then
+            local filepath = kepub_path .. "/" .. entry
+            local entry_attr = lfs.attributes(filepath, "mode")
+            if entry_attr == "file" then
+                table.insert(book_ids, entry)
+            end
+        end
+    end
+
+    logger.dbg("KoboPlugin: Found", #book_ids, "files in kepub directory")
+    return book_ids
+end
+
+---
 -- Filters the metadata cache to return only accessible, unencrypted books.
--- Checks each book's accessibility and encryption status.
+-- Scans kepub directory to find files, checks encryption status,
+-- and looks up metadata in the cached database.
 -- Logs statistics about accessible, encrypted, and missing books.
 -- @return table: Array of accessible book entries, each containing id, metadata, filepath, and thumbnail.
 function MetadataParser:getAccessibleBooks()
     local accessible = {}
-    local metadata = self:getMetadata()
 
-    logger.dbg("KoboPlugin: Checking accessibility for", self:getBookCount(), "books")
+    local all_metadata = self:getMetadata()
+
+    local book_ids = self:scanKepubDirectory()
+    if #book_ids == 0 then
+        logger.info("KoboPlugin: Accessible books: 0 Encrypted: 0 Missing: 0")
+        return accessible
+    end
+
+    logger.dbg("KoboPlugin: Checking accessibility for", #book_ids, "files")
 
     local accessible_count = 0
     local encrypted_count = 0
-    local missing_count = 0
+    local no_metadata_count = 0
 
-    for book_id, book_meta in pairs(metadata) do
-        local is_accessible = self:isBookAccessible(book_id)
-        if not is_accessible then
-            missing_count = missing_count + 1
-        end
+    for _, book_id in ipairs(book_ids) do
+        local encrypted = self:isBookEncrypted(book_id)
 
-        if is_accessible and self:isBookEncrypted(book_id) then
+        if encrypted then
             encrypted_count = encrypted_count + 1
-            logger.dbg("KoboPlugin: Book is encrypted:", book_id, book_meta.title)
+            logger.dbg("KoboPlugin: Book is encrypted:", book_id)
         end
 
-        if is_accessible and not self:isBookEncrypted(book_id) then
-            local filepath = self:getBookFilePath(book_id)
-            local thumbnail = self:getThumbnailPath(book_id)
-            local entry = createAccessibleBookEntry(book_id, book_meta, filepath, thumbnail)
-            table.insert(accessible, entry)
-            accessible_count = accessible_count + 1
+        if not encrypted then
+            local book_meta = all_metadata[book_id]
+
+            if book_meta then
+                local filepath = self:getBookFilePath(book_id)
+                local thumbnail = self:getThumbnailPath(book_id)
+                local entry = createAccessibleBookEntry(book_id, book_meta, filepath, thumbnail)
+                table.insert(accessible, entry)
+                accessible_count = accessible_count + 1
+            end
+
+            if not book_meta then
+                no_metadata_count = no_metadata_count + 1
+                logger.dbg("KoboPlugin: No metadata found in database for book:", book_id)
+            end
         end
     end
 
@@ -396,7 +436,7 @@ function MetadataParser:getAccessibleBooks()
         "Encrypted:",
         encrypted_count,
         "Missing:",
-        missing_count
+        no_metadata_count
     )
 
     return accessible
