@@ -42,8 +42,8 @@
 
 # Developer Guide
 
-- [Architecture](./dev/architecture/00-overview.md)
-  - [High-Level Architecture](./dev/architecture/01-high-level.md)
+- [High-Level Architecture](./dev/architecture/00-overview.md)
+  - [Architecture Overview](./dev/architecture/01-high-level.md)
 - [Virtual Library](./dev/virtual-library/index.md)
   - [DRM Detection](./dev/virtual-library/drm-detection.md)
 - [Database & Data Storage](./dev/database/00-overview.md)
@@ -57,6 +57,7 @@
     - [Data Flow](./dev/database/koreader/03-data-flow.md)
   - [Sync Decision Logic](./dev/database/03-sync-decision-logic.md)
 - [Bluetooth](./dev/bluetooth/index.md)
+  - [Architecture](./dev/bluetooth/architecture.md)
   - [Dispatcher Integration](./dev/bluetooth/dispatcher.md)
   - [Key Bindings](./dev/bluetooth/key-bindings.md)
 
